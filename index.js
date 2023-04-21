@@ -2,6 +2,9 @@ const express = require('express');
 const app = express();
 const { User, Kitten } = require('./db');
 const jwt = require("jsonwebtoken")
+const bcrypt = require("bcrypt")
+
+const SALT_COUNT = 10
 
 app.use(express.json());
 app.use(express.urlencoded({extended:true}));
@@ -22,7 +25,10 @@ app.get('/', async (req, res, next) => {
 
 // Verifies token with jwt.verify and sets req.user
 // TODO - Create authentication middleware
-app.use((req,res,next)=>{
+app.use( (req,res,next)=>{
+  if (req.url === "/register" || req.url === "/login"){
+    return next()
+  }
   let auth = req.header("Authorization")
   if(auth){
     let [,token] = auth.split(" ")
@@ -31,33 +37,61 @@ app.use((req,res,next)=>{
       next()
     }catch(error){
       res.sendStatus(401)
+      return
     }
   }else{
     res.set("WWW-Authenticate", "Bearer")
     res.sendStatus(401)
+    return
   }
 })
 
 
-
-
 // POST /register
 // OPTIONAL - takes req.body of {username, password} and creates a new user with the hashed password
-// app.post("/register")
+app.post("/register", async(req,res,next)=>{
+  const hash = await bcrypt.hash(req.body.password, SALT_COUNT)
+  let user = await User.create({username:req.body.username, password:hash})
+  let token = jwt.sign(user.username, process.env.JWT_SECRET)
+  res.status(200).send({"message":"success",token})
+  return
+})
 
 
 // POST /login
 // OPTIONAL - takes req.body of {username, password}, finds user by username, and compares the password with the hashed version from the DB
+app.post("/login", async(req,res)=>{
+  console.log("here")
+  const user = await User.findOne({where:{username:req.body.username}})
+  const matches = await bcrypt.compare(req.body.password, user.password)
+  if (matches){
+    let token = jwt.sign(user.username, process.env.JWT_SECRET)
+    res.status(200).send({token,"message":"success"})
+  }else{
+    res.sendStatus(401)
+  }
+})
 
 // GET /kittens/:id
 // TODO - takes an id and returns the cat with that id
 app.get("/kittens/:id", async(req,res,next)=>{
-  let cat = await Kitten.findOne({where:{id : req.params.id} })
-  if (req.user.id === cat.ownerId){
-    let kitten = { age:cat.age, color:cat.color, name:cat.name}
-    res.status(200).send(kitten) 
-  }else{
-    res.sendStatus(401)
+  try{
+    let cat = await Kitten.findOne({where:{id : req.params.id}, include:{model:User} })
+    if (!cat){ 
+      res.sendStatus(404)
+      return 
+    }else{  
+      if (req.user.id === cat.ownerId){
+        let kitten = { age:cat.age, color:cat.color, name:cat.name}
+        res.send(kitten) 
+        return
+      }else{
+        res.sendStatus(403)
+        return
+      }
+    }
+  }catch(err){
+    next(err)
   }
 })
 
